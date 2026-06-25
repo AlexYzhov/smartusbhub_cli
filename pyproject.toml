@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartusbhub-cli"
+version = "0.1.0"
+description = "CLI, HTTP server, and MCP server for SmartUSBHub"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.8"
+authors = [
+    {name = "EmbeddedTec studio"},
+]
+keywords = ["smartusbhub", "usb", "serial", "cli", "mcp", "rest"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "pyserial>=3.5",
+    "typer[all]>=0.9.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "mcp>=1.0.0",
+    "pydantic>=2.5.0",
+    "colorlog>=6.0",
+    "smartusbhub>=1.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+smartusbhub = "smartusbhub_cli.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/MrzhangF1ghter/smartusbhub"
+Repository = "https://github.com/MrzhangF1ghter/smartusbhub"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+smartusbhub_cli = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
