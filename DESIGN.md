@@ -13,7 +13,7 @@ The upstream Python library lives in `smartusbhub/smartusbhub.py`. It uses a USB
   2. **HTTP server** — expose the hub as a REST API.
   3. **HTTP client** — run the same CLI commands against a remote server.
   4. **MCP server** — expose the hub as MCP tools over `stdio` or SSE.
-- JSON output by default; human-readable output with `--human`.
+- JSON output by default; pretty lsusb/lspci-style output with `--pretty` (default ON for local/remote CLI, OFF for servers).
 - Configurable via a config file and environment variables.
 - Packaged as a single binary for ARM64 and x86_64 Linux via PyInstaller.
 - `zipapp` fallback for environments where PyInstaller is not available.
@@ -53,10 +53,13 @@ smartusbhub_cli/
 Global options (applicable to every local/remote CLI command):
 
 ```
---port, -p      Serial port (e.g. /dev/ttyUSB0 or COM3). Overrides config/env.
+--device, -d    Serial device (e.g. /dev/ttyACM0 or COM3). Overrides config/env.
 --remote, -r    Remote URL (e.g. http://192.168.1.10:8000). Enables client mode.
---human, -h     Emit human-readable output instead of JSON.
---config        Path to config file (default: ~/.config/smartusbhub_cli/config.json).
+--pretty/--no-pretty  Pretty-print output in lsusb/lspci style (default ON for CLI).
+--config        Path to config file (default: ~/.config/smartusbhub_cli.json).
+
+Note: global options must be placed **before** the subcommand
+(e.g. `smartusbhub --no-pretty info`, not `smartusbhub info --no-pretty`).
 ```
 
 ### 4.1 Power
@@ -110,6 +113,7 @@ smartusbhub config factory-reset
 
 ```
 smartusbhub info
+smartusbhub status          # alias for info
 smartusbhub firmware-version
 smartusbhub hardware-version
 ```
@@ -195,32 +199,34 @@ The MCP server registers one tool per operation. Names follow the CLI command na
 
 ## 7. Configuration
 
-Default config path: `~/.config/smartusbhub_cli/config.json`.
+Default config path: `~/.config/smartusbhub_cli.json`.
 
 Supported settings:
 
 ```json
 {
-  "port": "/dev/ttyUSB0",
+  "device": "/dev/ttyACM0",
   "baudrate": 115200,
   "timeout": 0.5,
-  "host": "127.0.0.1",
-  "http_port": 8000,
-  "remote_url": null,
+  "server_host": "127.0.0.1",
+  "server_port": 8000,
   "mcp_transport": "stdio",
   "mcp_port": 8001,
   "mcp_host": "127.0.0.1",
-  "human_readable": false
+  "pretty": true
 }
 ```
 
+`server_host`/`server_port` drive both the explicit `server` subcommand (bind address) and normal subcommands in client mode.
+
 Environment variables override the config file:
 
-- `SMARTUSBHUB_PORT`
-- `SMARTUSBHUB_REMOTE`
-- `SMARTUSBHUB_HOST`
-- `SMARTUSBHUB_HTTP_PORT`
+- `SMARTUSBHUB_DEVICE`
+- `SMARTUSBHUB_SERVER_HOST`
+- `SMARTUSBHUB_SERVER_PORT`
 - `SMARTUSBHUB_MCP_PORT`
+- `SMARTUSBHUB_BAUDRATE`
+- `SMARTUSBHUB_TIMEOUT`
 
 CLI options override environment variables.
 
@@ -252,7 +258,7 @@ See `.github/workflows/build.yml`:
 
 ## 9. Implementation Notes for Developers
 
-- `protocol.py` should be a thin facade over `smartusbhub.SmartUSBHub` from the existing library. It should translate bitmask-style channel groups into the CLI's list-of-integers convention.
+- `protocol.py` implements the SmartUSBHub serial protocol natively on top of `pyserial`, with no dependency on the upstream `smartusbhub` library. It translates bitmask-style channel groups into the CLI's list-of-integers convention.
 - `http_server.py` and `client.py` must share Pydantic request/response models where practical.
 - `cli.py` should instantiate either `HubProtocol` or `HTTPClient` once in the Typer callback and pass the object through `typer.Context`.
 - All user-facing output goes through `utils.format_output()` so JSON/human modes are consistent.

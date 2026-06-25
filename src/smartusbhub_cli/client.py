@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from smartusbhub_cli.commit import get_commit_hash
+
 
 class HTTPClientError(Exception):
     """Raised when the HTTP server returns an error envelope."""
@@ -26,7 +28,10 @@ class HTTPClient:
     def __init__(self, base_url: str, timeout: float = 10.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(
+            timeout=timeout,
+            headers={"X-Commit-Hash": get_commit_hash()},
+        )
 
     def close(self) -> None:
         """Close the underlying HTTP session."""
@@ -64,11 +69,18 @@ class HTTPClient:
     # ------------------------------------------------------------------
     # Power
     # ------------------------------------------------------------------
-    def set_power(self, channels: List[int], state: bool) -> Dict[int, bool]:
-        return self._request("POST", "/power", {"channels": channels, "state": state})
+    @staticmethod
+    def _int_keys(data: Dict[str, Any]) -> Dict[int, Any]:
+        """Convert stringified integer keys back to integers."""
+        return {int(k): v for k, v in data.items()}
+
+    def set_power(self, channels: List[int], state: bool) -> bool:
+        return self._request("POST", "/power", {"channels": channels, "state": state})["set"]
 
     def get_power(self, channels: List[int]) -> Dict[int, bool]:
-        return self._request("GET", "/power", params={"channels": self._channels_param(channels)})
+        return self._int_keys(
+            self._request("GET", "/power", params={"channels": self._channels_param(channels)})
+        )
 
     def set_interlock(self, channel: int) -> bool:
         self._request("POST", f"/interlock/{channel}")
@@ -77,11 +89,13 @@ class HTTPClient:
     # ------------------------------------------------------------------
     # Dataline
     # ------------------------------------------------------------------
-    def set_dataline(self, channels: List[int], state: bool) -> Dict[int, bool]:
-        return self._request("POST", "/dataline", {"channels": channels, "state": state})
+    def set_dataline(self, channels: List[int], state: bool) -> bool:
+        return self._request("POST", "/dataline", {"channels": channels, "state": state})["set"]
 
     def get_dataline(self, channels: List[int]) -> Dict[int, bool]:
-        return self._request("GET", "/dataline", params={"channels": self._channels_param(channels)})
+        return self._int_keys(
+            self._request("GET", "/dataline", params={"channels": self._channels_param(channels)})
+        )
 
     # ------------------------------------------------------------------
     # Measurements
@@ -97,30 +111,34 @@ class HTTPClient:
     # ------------------------------------------------------------------
     def set_default_power(
         self, channels: List[int], enable: bool, state: Optional[bool] = None
-    ) -> Dict[int, Dict[str, bool]]:
+    ) -> bool:
         payload: Dict[str, Any] = {"channels": channels, "enable": enable}
         if state is not None:
             payload["state"] = state
-        return self._request("POST", "/config/default-power", payload)
+        return self._request("POST", "/config/default-power", payload)["set"]
 
     def get_default_power(self, channels: List[int]) -> Dict[int, Dict[str, bool]]:
-        return self._request(
-            "GET", "/config/default-power", params={"channels": self._channels_param(channels)}
+        return self._int_keys(
+            self._request(
+                "GET", "/config/default-power", params={"channels": self._channels_param(channels)}
+            )
         )
 
     def set_default_dataline(
         self, channels: List[int], enable: bool, state: Optional[bool] = None
-    ) -> Dict[int, Dict[str, bool]]:
+    ) -> bool:
         payload: Dict[str, Any] = {"channels": channels, "enable": enable}
         if state is not None:
             payload["state"] = state
-        return self._request("POST", "/config/default-dataline", payload)
+        return self._request("POST", "/config/default-dataline", payload)["set"]
 
     def get_default_dataline(self, channels: List[int]) -> Dict[int, Dict[str, bool]]:
-        return self._request(
-            "GET",
-            "/config/default-dataline",
-            params={"channels": self._channels_param(channels)},
+        return self._int_keys(
+            self._request(
+                "GET",
+                "/config/default-dataline",
+                params={"channels": self._channels_param(channels)},
+            )
         )
 
     def set_auto_restore(self, enable: bool) -> bool:

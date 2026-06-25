@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from mcp.server import FastMCP
 
-from smartusbhub_cli.config import load_config
+from smartusbhub_cli.config import DEFAULT_MCP_PORT, load_config
 from smartusbhub_cli.protocol import HubError, HubProtocol, HubState
 from smartusbhub_cli.utils import resolve_channels
 
@@ -28,10 +28,10 @@ class MCPServer:
     def _get_protocol(self) -> HubProtocol:
         if self.protocol is None:
             cfg = load_config()
-            port = self.port_name or cfg.port
-            if not port:
-                raise HubError("No serial port configured for MCP server")
-            self.protocol = HubProtocol(port, cfg.baudrate, cfg.timeout)
+            device = self.port_name or cfg.device
+            if not device:
+                raise HubError("No serial device configured for MCP server")
+            self.protocol = HubProtocol(device, cfg.baudrate, cfg.timeout)
         return self.protocol
 
     def _tool_result(self, data: Any) -> str:
@@ -247,7 +247,12 @@ class MCPServer:
         asyncio.run(self.mcp.run_sse_async(host=host, port=port))
 
 
-def run_mcp(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8001, serial_port: Optional[str] = None) -> None:
+def run_mcp(
+    transport: str = "stdio",
+    host: str = "127.0.0.1",
+    port: int = DEFAULT_MCP_PORT,
+    serial_port: Optional[str] = None,
+) -> None:
     """Convenience entry point used by the CLI."""
     server = MCPServer(port_name=serial_port)
     server.register_tools()

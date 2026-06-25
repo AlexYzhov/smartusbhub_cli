@@ -31,8 +31,6 @@ dependencies = [
     "uvicorn[standard]>=0.24.0",
     "mcp>=1.0.0",
     "pydantic>=2.5.0",
-    "colorlog>=6.0",
-    "smartusbhub>=1.0.2",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +38,7 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
     "httpx>=0.25.0",
+    "httpx2>=2.5.0",
     "pyinstaller>=6.0",
 ]
 

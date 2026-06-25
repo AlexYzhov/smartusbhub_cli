@@ -16,6 +16,7 @@ build/
 dist/
 *.spec
 !smartusbhub_cli.spec
+src/smartusbhub_cli/_built_commit.py
 
 # IDE
 .vscode/

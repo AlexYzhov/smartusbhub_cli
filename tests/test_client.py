@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from smartusbhub_cli import http_server
 from smartusbhub_cli.client import HTTPClient
+from smartusbhub_cli.commit import get_commit_hash
 from smartusbhub_cli.http_server import _server_state
 from smartusbhub_cli.protocol import HubProtocol
 
@@ -20,15 +21,17 @@ def http_client(mock_hub, monkeypatch):
 
     def fake_load_config(path=None):
         cfg = original_load_config(path)
-        cfg.port = "/dev/fakehub"
+        cfg.device = "/dev/fakehub"
         return cfg
 
     monkeypatch.setattr(config_module, "load_config", fake_load_config)
-    monkeypatch.setattr(http_server, "load_config", fake_load_config)
 
     _server_state.protocol = HubProtocol("/dev/fakehub")
 
-    with TestClient(http_server.app) as test_client:
+    with TestClient(
+        http_server.app,
+        headers={"X-Commit-Hash": get_commit_hash()},
+    ) as test_client:
         # HTTPClient uses httpx, but TestClient is ASGI-compatible.  We
         # monkeypatch the internal transport so HTTPClient talks to the app
         # without starting a real server.
@@ -40,12 +43,12 @@ def http_client(mock_hub, monkeypatch):
 
 
 def test_client_set_power(http_client):
-    assert http_client.set_power([1, 3], True) == {"1": True, "3": True}
+    assert http_client.set_power([1, 3], True) is True
 
 
 def test_client_get_power(http_client):
     http_client.set_power([2], True)
-    assert http_client.get_power([2]) == {"2": True}
+    assert http_client.get_power([2]) == {2: True}
 
 
 def test_client_set_interlock(http_client):
@@ -53,12 +56,12 @@ def test_client_set_interlock(http_client):
 
 
 def test_client_set_dataline(http_client):
-    assert http_client.set_dataline([4], True) == {"4": True}
+    assert http_client.set_dataline([4], True) is True
 
 
 def test_client_get_dataline(http_client):
     http_client.set_dataline([1], True)
-    assert http_client.get_dataline([1]) == {"1": True}
+    assert http_client.get_dataline([1]) == {1: True}
 
 
 def test_client_voltage(http_client):
@@ -70,14 +73,13 @@ def test_client_current(http_client):
 
 
 def test_client_default_power(http_client):
-    result = http_client.set_default_power([1], enable=True, state=True)
-    assert result == {"1": {"enabled": True, "value": True}}
-    assert http_client.get_default_power([1]) == {"1": {"enabled": True, "value": True}}
+    assert http_client.set_default_power([1], enable=True, state=True) is True
+    assert http_client.get_default_power([1]) == {1: {"enabled": True, "value": True}}
 
 
 def test_client_default_dataline(http_client):
-    result = http_client.set_default_dataline([2], enable=True, state=False)
-    assert result == {"2": {"enabled": True, "value": False}}
+    assert http_client.set_default_dataline([2], enable=True, state=False) is True
+    assert http_client.get_default_dataline([2]) == {2: {"enabled": True, "value": False}}
 
 
 def test_client_auto_restore(http_client):

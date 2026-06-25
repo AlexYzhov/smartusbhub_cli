@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from smartusbhub_cli import http_server
+from smartusbhub_cli.commit import get_commit_hash
 
 
 @pytest.fixture
@@ -17,18 +18,19 @@ def client(mock_hub, monkeypatch):
 
     def fake_load_config(path=None):
         cfg = original_load_config(path)
-        cfg.port = "/dev/fakehub"
+        cfg.device = "/dev/fakehub"
         return cfg
 
-    # Patch the reference held inside http_server as well as the module-level
-    # reference in config.
+    # Patch the module-level config loader used by http_server.
     monkeypatch.setattr(config_module, "load_config", fake_load_config)
-    monkeypatch.setattr(http_server, "load_config", fake_load_config)
 
     # Reset server state.
     http_server._server_state.protocol = None
 
-    with TestClient(http_server.app) as test_client:
+    with TestClient(
+        http_server.app,
+        headers={"X-Commit-Hash": get_commit_hash()},
+    ) as test_client:
         yield test_client
 
     http_server._server_state.protocol = None
@@ -51,7 +53,7 @@ def test_power_set_and_get(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
-    assert body["data"] == {"1": True, "3": True}
+    assert body["data"] == {"set": True}
 
     resp = client.get("/power?channels=1,2,3,4")
     body = resp.json()
@@ -68,7 +70,7 @@ def test_interlock(client):
 def test_dataline(client):
     resp = client.post("/dataline", json={"channels": [2], "state": True})
     assert resp.status_code == 200
-    assert resp.json()["data"] == {"2": True}
+    assert resp.json()["data"] == {"set": True}
 
 
 def test_voltage(client):
@@ -92,7 +94,7 @@ def test_default_power(client):
     )
     body = resp.json()
     assert body["success"] is True
-    assert body["data"]["1"] == {"enabled": True, "value": True}
+    assert body["data"] == {"set": True}
 
     resp = client.get("/config/default-power?channels=1,2")
     body = resp.json()
@@ -149,3 +151,26 @@ def test_invalid_channel(client):
     resp = client.get("/power?channels=1,9")
     assert resp.status_code == 400
     assert resp.json()["success"] is False
+
+
+def test_missing_commit_hash_rejected(client):
+    """Requests without X-Commit-Hash must be rejected."""
+    from fastapi.testclient import TestClient
+
+    with TestClient(client.app) as bare_client:
+        resp = bare_client.get("/health")
+        assert resp.status_code == 400
+        assert "Commit hash mismatch" in resp.json()["error"]
+
+
+def test_wrong_commit_hash_rejected(client):
+    """Requests with a mismatched X-Commit-Hash must be rejected."""
+    from fastapi.testclient import TestClient
+
+    with TestClient(
+        client.app,
+        headers={"X-Commit-Hash": "mismatch"},
+    ) as bad_client:
+        resp = bad_client.get("/health")
+        assert resp.status_code == 400
+        assert "Commit hash mismatch" in resp.json()["error"]

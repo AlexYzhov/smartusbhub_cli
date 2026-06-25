@@ -2,190 +2,242 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock
 
 import pytest
 
-# Make the upstream ``smartusbhub`` package importable from the workspace layout.
-_UPSTREAM_ROOT = Path(__file__).resolve().parents[2] / "smartusbhub"
-if str(_UPSTREAM_ROOT.parent) not in sys.path:
-    sys.path.insert(0, str(_UPSTREAM_ROOT.parent))
+from smartusbhub_cli import protocol as protocol_module
 
 
-class FakeSmartUSBHub:
-    """Test double for ``smartusbhub.SmartUSBHub``.
+class FakePortInfo:
+    """Minimal object returned by ``serial.tools.list_ports.comports``."""
 
-    Uses class-level state so multiple ``HubProtocol`` / CLI invocations within
-    a single test share the same simulated device state.
-    """
+    def __init__(self, device: str, vid: int, pid: int) -> None:
+        self.device = device
+        self.vid = vid
+        self.pid = pid
 
-    _state: Dict[str, Any] = {
-        "power": {1: False, 2: False, 3: False, 4: False},
-        "dataline": {1: False, 2: False, 3: False, 4: False},
-        "default_power": {ch: {"enabled": 0, "value": 0} for ch in range(1, 5)},
-        "default_dataline": {ch: {"enabled": 0, "value": 0} for ch in range(1, 5)},
-        "voltage": {1: 5100, 2: 5000, 3: 4900, 4: 4800},
-        "current": {1: 100, 2: 200, 3: 300, 4: 400},
-        "auto_restore_status": 0,
-        "button_control_status": 1,
-        "operate_mode": 0,
-        "device_address": 0x0001,
-        "firmware_version": 15,
-        "hardware_version": 3,
-    }
 
-    @classmethod
-    def reset(cls) -> None:
-        cls._state = {
+class FakeSerial:
+    """In-memory serial port that emulates SmartUSBHub protocol responses."""
+
+    def __init__(self, port: str, *args: Any, **kwargs: Any) -> None:
+        self.port = port
+        self.is_open = True
+        self._state: Dict[str, Any] = {
             "power": {1: False, 2: False, 3: False, 4: False},
             "dataline": {1: False, 2: False, 3: False, 4: False},
             "default_power": {ch: {"enabled": 0, "value": 0} for ch in range(1, 5)},
             "default_dataline": {ch: {"enabled": 0, "value": 0} for ch in range(1, 5)},
             "voltage": {1: 5100, 2: 5000, 3: 4900, 4: 4800},
             "current": {1: 100, 2: 200, 3: 300, 4: 400},
-            "auto_restore_status": 0,
-            "button_control_status": 1,
+            "auto_restore": 0,
+            "button_control": 1,
             "operate_mode": 0,
             "device_address": 0x0001,
             "firmware_version": 15,
             "hardware_version": 3,
         }
+        self._written: bytes = b""
+        self._read_buffer: bytearray = bytearray()
 
-    def __init__(self, port: str) -> None:
-        self.port = port
+    def reset(self) -> None:
+        self._state = {
+            "power": {1: False, 2: False, 3: False, 4: False},
+            "dataline": {1: False, 2: False, 3: False, 4: False},
+            "default_power": {ch: {"enabled": 0, "value": 0} for ch in range(1, 5)},
+            "default_dataline": {ch: {"enabled": 0, "value": 0} for ch in range(1, 5)},
+            "voltage": {1: 5100, 2: 5000, 3: 4900, 4: 4800},
+            "current": {1: 100, 2: 200, 3: 300, 4: 400},
+            "auto_restore": 0,
+            "button_control": 1,
+            "operate_mode": 0,
+            "device_address": 0x0001,
+            "firmware_version": 15,
+            "hardware_version": 3,
+        }
+        self._read_buffer.clear()
 
-    def disconnect(self) -> None:
+    @property
+    def in_waiting(self) -> int:
+        return len(self._read_buffer)
+
+    def write(self, data: bytes) -> int:
+        self._written = data
+        self._handle_command(data)
+        return len(data)
+
+    def read(self, size: int = 1) -> bytes:
+        if size > len(self._read_buffer):
+            size = len(self._read_buffer)
+        chunk = bytes(self._read_buffer[:size])
+        self._read_buffer[:size] = b""
+        return chunk
+
+    def flush(self) -> None:
         pass
 
-    @classmethod
-    def scan_available_ports(cls) -> list[str]:
-        return ["/dev/fakehub"]
+    def reset_input_buffer(self) -> None:
+        self._read_buffer.clear()
 
-    @classmethod
-    def scan_and_connect(cls) -> "FakeSmartUSBHub":
-        return cls("/dev/fakehub")
+    def close(self) -> None:
+        pass
 
-    def set_channel_power(self, *channels: int, state: int) -> bool:
-        for ch in channels:
-            self._state["power"][ch] = bool(state)
-        return True
+    def _emit(self, cmd: int, channel: int, value: int, extra: Optional[List[int]] = None) -> None:
+        if extra is None:
+            checksum = (cmd + channel + value) & 0xFF
+            self._read_buffer.extend([0x55, 0x5A, cmd, channel, value, checksum])
+        else:
+            checksum = (cmd + channel + extra[0] + extra[1]) & 0xFF
+            self._read_buffer.extend([0x55, 0x5A, cmd, channel, extra[0], extra[1], checksum])
 
-    def get_channel_power_status(self, *channels: int) -> Any:
-        if len(channels) == 1:
-            return int(self._state["power"][channels[0]])
-        return {ch: int(self._state["power"][ch]) for ch in channels}
+    @staticmethod
+    def _mask_to_channels(mask: int) -> List[int]:
+        return [i for i in range(1, 5) if mask & (1 << (i - 1))]
 
-    def set_channel_power_interlock(self, channel: int | None) -> bool:
-        return True
+    def _handle_command(self, data: bytes) -> None:
+        if len(data) < 6:
+            return
+        cmd = data[2]
+        channel = data[3]
+        value = data[4]
 
-    def set_channel_dataline(self, *channels: int, state: int) -> bool:
-        for ch in channels:
-            self._state["dataline"][ch] = bool(state)
-        return True
+        if cmd == protocol_module.CMD_SET_CHANNEL_POWER:
+            for ch in self._mask_to_channels(channel):
+                self._state["power"][ch] = bool(value)
+            self._emit(cmd, channel, value)
 
-    def get_channel_dataline_status(self, *channels: int) -> Dict[int, int]:
-        return {ch: int(self._state["dataline"][ch]) for ch in channels}
+        elif cmd == protocol_module.CMD_GET_CHANNEL_POWER_STATUS:
+            for ch in self._mask_to_channels(channel):
+                self._emit(cmd, 1 << (ch - 1), int(self._state["power"][ch]))
 
-    def get_channel_voltage(self, channel: int) -> int:
-        return self._state["voltage"][channel]
+        elif cmd == protocol_module.CMD_SET_CHANNEL_POWER_INTERLOCK:
+            if channel == 0:
+                for ch in range(1, 5):
+                    self._state["power"][ch] = False
+            else:
+                for ch in self._mask_to_channels(channel):
+                    self._state["power"][ch] = False
+            self._emit(cmd, channel, value)
 
-    def get_channel_current(self, channel: int) -> int:
-        return self._state["current"][channel]
+        elif cmd == protocol_module.CMD_SET_CHANNEL_DATALINE:
+            for ch in self._mask_to_channels(channel):
+                self._state["dataline"][ch] = bool(value)
+            self._emit(cmd, channel, value)
 
-    def set_default_power_status(
-        self, *channels: int, enable: int, status: int = 0
-    ) -> bool:
-        for ch in channels:
-            self._state["default_power"][ch] = {"enabled": enable, "value": status}
-        return True
+        elif cmd == protocol_module.CMD_GET_CHANNEL_DATALINE_STATUS:
+            for ch in self._mask_to_channels(channel):
+                self._emit(cmd, 1 << (ch - 1), int(self._state["dataline"][ch]))
 
-    def get_default_power_status(self, *channels: int) -> Dict[int, Dict[str, int]]:
-        return {ch: self._state["default_power"][ch] for ch in channels}
+        elif cmd == protocol_module.CMD_GET_CHANNEL_VOLTAGE:
+            voltage = self._state["voltage"][self._mask_to_channels(channel)[0]]
+            self._emit(cmd, channel, voltage, [(voltage >> 8) & 0xFF, voltage & 0xFF])
 
-    def set_default_dataline_status(
-        self, *channels: int, enable: int, status: int = 0
-    ) -> bool:
-        for ch in channels:
-            self._state["default_dataline"][ch] = {"enabled": enable, "value": status}
-        return True
+        elif cmd == protocol_module.CMD_GET_CHANNEL_CURRENT:
+            current = self._state["current"][self._mask_to_channels(channel)[0]]
+            self._emit(cmd, channel, current, [(current >> 8) & 0xFF, current & 0xFF])
 
-    def get_default_dataline_status(self, *channels: int) -> Dict[int, Dict[str, int]]:
-        return {ch: self._state["default_dataline"][ch] for ch in channels}
+        elif cmd == protocol_module.CMD_SET_DEFAULT_POWER_STATUS:
+            enable, status = data[4], data[5]
+            for ch in self._mask_to_channels(channel):
+                self._state["default_power"][ch] = {"enabled": enable, "value": status}
+            self._emit(cmd, channel, 0, [enable, status])
 
-    def set_auto_restore(self, enable: bool) -> bool:
-        self._state["auto_restore_status"] = 1 if enable else 0
-        return True
+        elif cmd == protocol_module.CMD_GET_DEFAULT_POWER_STATUS:
+            for ch in self._mask_to_channels(channel):
+                dp = self._state["default_power"][ch]
+                self._emit(cmd, 1 << (ch - 1), 0, [dp["enabled"], dp["value"]])
 
-    def get_auto_restore_status(self) -> int:
-        return self._state["auto_restore_status"]
+        elif cmd == protocol_module.CMD_SET_DEFAULT_DATALINE_STATUS:
+            enable, status = data[4], data[5]
+            for ch in self._mask_to_channels(channel):
+                self._state["default_dataline"][ch] = {"enabled": enable, "value": status}
+            self._emit(cmd, channel, 0, [enable, status])
 
-    def set_button_control(self, enable: bool) -> bool:
-        self._state["button_control_status"] = 1 if enable else 0
-        return True
+        elif cmd == protocol_module.CMD_GET_DEFAULT_DATALINE_STATUS:
+            for ch in self._mask_to_channels(channel):
+                dd = self._state["default_dataline"][ch]
+                self._emit(cmd, 1 << (ch - 1), 0, [dd["enabled"], dd["value"]])
 
-    def get_button_control_status(self) -> int:
-        return self._state["button_control_status"]
+        elif cmd == protocol_module.CMD_SET_AUTO_RESTORE:
+            self._state["auto_restore"] = int(value)
+            self._emit(cmd, channel, value)
 
-    def set_operate_mode(self, mode: int) -> bool:
-        self._state["operate_mode"] = mode
-        return True
+        elif cmd == protocol_module.CMD_GET_AUTO_RESTORE_STATUS:
+            self._emit(cmd, channel, self._state["auto_restore"])
 
-    def get_operate_mode(self) -> int:
-        return self._state["operate_mode"]
+        elif cmd == protocol_module.CMD_SET_BUTTON_CONTROL:
+            self._state["button_control"] = int(value)
+            self._emit(cmd, channel, value)
 
-    def set_device_address(self, address: int) -> bool:
-        self._state["device_address"] = address
-        return True
+        elif cmd == protocol_module.CMD_GET_BUTTON_CONTROL_STATUS:
+            self._emit(cmd, channel, self._state["button_control"])
 
-    def get_device_address(self) -> int:
-        return self._state["device_address"]
+        elif cmd == protocol_module.CMD_SET_OPERATE_MODE:
+            self._state["operate_mode"] = int(value)
+            self._emit(cmd, channel, value)
 
-    def factory_reset(self) -> bool:
-        return True
+        elif cmd == protocol_module.CMD_GET_OPERATE_MODE:
+            self._emit(cmd, channel, self._state["operate_mode"])
 
-    def get_firmware_version(self) -> int:
-        return self._state["firmware_version"]
+        elif cmd == protocol_module.CMD_SET_DEVICE_ADDRESS:
+            address = (channel << 8) | value
+            self._state["device_address"] = address
+            self._emit(cmd, channel, value)
 
-    def get_hardware_version(self) -> int:
-        return self._state["hardware_version"]
+        elif cmd == protocol_module.CMD_GET_DEVICE_ADDRESS:
+            address = self._state["device_address"]
+            self._emit(cmd, (address >> 8) & 0xFF, address & 0xFF)
 
-    def get_device_info(self) -> Dict[str, Any]:
-        return {
-            "id": self.port.split("/")[-1],
-            "address": self._state["device_address"],
-            "hardware_version": self._state["hardware_version"],
-            "firmware_version": self._state["firmware_version"],
-            "operate_mode": "normal"
-            if self._state["operate_mode"] == 0
-            else "interlock",
-            "auto_restore": "enabled"
-            if self._state["auto_restore_status"]
-            else "disabled",
-            "button_control_status": "enabled"
-            if self._state["button_control_status"]
-            else "disabled",
-        }
+        elif cmd == protocol_module.CMD_FACTORY_RESET:
+            self.reset()
+            self._emit(cmd, channel, value)
+
+        elif cmd == protocol_module.CMD_GET_FIRMWARE_VERSION:
+            self._emit(cmd, channel, self._state["firmware_version"])
+
+        elif cmd == protocol_module.CMD_GET_HARDWARE_VERSION:
+            self._emit(cmd, channel, self._state["hardware_version"])
+
+
+@pytest.fixture
+def fake_serial(monkeypatch):
+    """Patch serial.Serial so all HubProtocol instances use FakeSerial."""
+    opened: List[FakeSerial] = []
+
+    # Share device state across FakeSerial instances so multiple HubProtocol
+    # lifecycles within a single test see the same simulated hub.
+    shared_state: Dict[str, Dict[str, Any]] = {}
+
+    def fake_constructor(port: str, *args: Any, **kwargs: Any) -> FakeSerial:
+        fake = FakeSerial(port, *args, **kwargs)
+        if port in shared_state:
+            fake._state = shared_state[port]
+        else:
+            fake.reset()
+            shared_state[port] = fake._state
+        opened.append(fake)
+        return fake
+
+    monkeypatch.setattr(protocol_module.serial, "Serial", fake_constructor)
+    monkeypatch.setattr(
+        protocol_module.serial.tools.list_ports,
+        "comports",
+        lambda: [FakePortInfo("/dev/fakehub", protocol_module.VID_SMARTUSBHUB, protocol_module.PID_SMARTUSBHUB)],
+    )
+    yield opened
+    for fake in opened:
+        fake.close()
+
+
+@pytest.fixture
+def mock_hub(fake_serial):
+    """Provide a single FakeSerial instance for tests that need direct access."""
+    return fake_serial
 
 
 @pytest.fixture
 def fake_hub_class():
-    """Return the test double class for patching."""
-    return FakeSmartUSBHub
-
-
-@pytest.fixture
-def fake_hub():
-    """Return an instance of the test double."""
-    return FakeSmartUSBHub("/dev/fakehub")
-
-
-@pytest.fixture
-def mock_hub(monkeypatch, fake_hub_class):
-    """Patch ``smartusbhub_cli.protocol.SmartUSBHub`` with the test double."""
-    from smartusbhub_cli import protocol as protocol_module
-
-    fake_hub_class.reset()
-    monkeypatch.setattr(protocol_module, "SmartUSBHub", fake_hub_class)
-    return fake_hub_class
+    """Backward-compatible alias for tests that reference the old fake hub class."""
+    return MagicMock

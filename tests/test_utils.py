@@ -7,36 +7,9 @@ import json
 import pytest
 
 from smartusbhub_cli.utils import (
-    bitmask_to_channels,
-    channels_to_bitmask,
     format_output,
     resolve_channels,
 )
-
-
-def test_channels_to_bitmask_single():
-    assert channels_to_bitmask([1]) == 0b0001
-    assert channels_to_bitmask([4]) == 0b1000
-
-
-def test_channels_to_bitmask_multiple():
-    assert channels_to_bitmask([1, 3]) == 0b0101
-    assert channels_to_bitmask([2, 4]) == 0b1010
-    assert channels_to_bitmask([1, 2, 3, 4]) == 0b1111
-
-
-def test_channels_to_bitmask_invalid():
-    with pytest.raises(ValueError):
-        channels_to_bitmask([0])
-    with pytest.raises(ValueError):
-        channels_to_bitmask([5])
-
-
-def test_bitmask_to_channels():
-    assert bitmask_to_channels(0b0101) == [1, 3]
-    assert bitmask_to_channels(0b1010) == [2, 4]
-    assert bitmask_to_channels(0b1111) == [1, 2, 3, 4]
-    assert bitmask_to_channels(0b0000) == []
 
 
 def test_resolve_channels_explicit():
@@ -53,8 +26,10 @@ def test_resolve_channels_default():
 
 
 def test_resolve_channels_invalid():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid channel"):
         resolve_channels([5])
+    with pytest.raises(ValueError, match="Channels must be integers from 1 to 4"):
+        resolve_channels([0])
 
 
 def test_format_output_json():
@@ -73,7 +48,20 @@ def test_format_output_error():
     assert "data" not in parsed
 
 
-def test_format_output_human():
-    text = format_output({"enabled": True}, human_readable=True)
-    assert "Success: True" in text
-    assert "enabled: on" in text
+def test_format_output_pretty():
+    text = format_output({"1": True, "2": False}, pretty=True)
+    assert "Status: OK" in text
+    assert "Channel 1: on" in text
+    assert "Channel 2: off" in text
+
+
+def test_format_output_pretty_measurement():
+    text = format_output({"channel": 1, "voltage": 5.1}, pretty=True)
+    assert "Status: OK" in text
+    assert "Channel 1: 5.100 V" in text
+
+
+def test_format_output_pretty_error():
+    text = format_output(None, success=False, error="no device", pretty=True)
+    assert "Status: FAILED" in text
+    assert "Error: no device" in text

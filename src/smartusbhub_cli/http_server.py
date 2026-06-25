@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from smartusbhub_cli.config import load_config
+from smartusbhub_cli import config as config_module
+from smartusbhub_cli.commit import get_commit_hash
 from smartusbhub_cli.protocol import (
     HubError,
     HubNotFoundError,
@@ -90,12 +93,12 @@ def _parse_channels(channels: str) -> List[int]:
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage the shared HubProtocol instance across requests."""
     if _server_state.protocol is None:
-        cfg = load_config()
-        port = getattr(lifespan, "port_name", None) or cfg.port
+        cfg = config_module.load_config()
+        device = getattr(lifespan, "port_name", None) or cfg.device
 
-        if port:
+        if device:
             try:
-                _server_state.protocol = HubProtocol(port, cfg.baudrate, cfg.timeout)
+                _server_state.protocol = HubProtocol(device, cfg.baudrate, cfg.timeout)
             except HubError:
                 # The server can still start; endpoints will return 503 until
                 # the connection is available.
@@ -109,6 +112,36 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(title="SmartUSBHub REST API", version="0.1.0", lifespan=lifespan)
+
+logger = logging.getLogger(__name__)
+EXPECTED_COMMIT_HASH = get_commit_hash()
+
+
+@app.middleware("http")
+async def _commit_hash_middleware(request: Request, call_next: Any) -> JSONResponse:
+    """Validate that every request carries the matching git commit hash."""
+    client_hash = request.headers.get("X-Commit-Hash")
+    if client_hash != EXPECTED_COMMIT_HASH:
+        client_host = request.client.host if request.client else "-"
+        logger.warning(
+            "Commit hash mismatch from %s at %s: expected %s, got %s",
+            client_host,
+            datetime.now(timezone.utc).isoformat(),
+            EXPECTED_COMMIT_HASH,
+            client_hash,
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "data": None,
+                "error": (
+                    f"Commit hash mismatch: expected {EXPECTED_COMMIT_HASH}, "
+                    f"got {client_hash}"
+                ),
+            },
+        )
+    return await call_next(request)
 
 
 @app.exception_handler(HubError)
@@ -149,8 +182,8 @@ async def health() -> APIResponse:
 @app.post("/power")
 async def set_power(req: PowerRequest) -> APIResponse:
     channels = resolve_channels(req.channels)
-    data = _get_protocol().set_power(channels, req.state)
-    return APIResponse(success=True, data=data)
+    _get_protocol().set_power(channels, req.state)
+    return APIResponse(success=True, data={"set": True})
 
 
 @app.get("/power")
@@ -172,8 +205,8 @@ async def set_interlock(channel: int) -> APIResponse:
 @app.post("/dataline")
 async def set_dataline(req: DatalineRequest) -> APIResponse:
     channels = resolve_channels(req.channels)
-    data = _get_protocol().set_dataline(channels, req.state)
-    return APIResponse(success=True, data=data)
+    _get_protocol().set_dataline(channels, req.state)
+    return APIResponse(success=True, data={"set": True})
 
 
 @app.get("/dataline")
@@ -204,8 +237,8 @@ async def get_current(channel: int) -> APIResponse:
 @app.post("/config/default-power")
 async def set_default_power(req: DefaultStatusRequest) -> APIResponse:
     channels = resolve_channels(req.channels)
-    data = _get_protocol().set_default_power(channels, req.enable, req.state)
-    return APIResponse(success=True, data=data)
+    _get_protocol().set_default_power(channels, req.enable, req.state)
+    return APIResponse(success=True, data={"set": True})
 
 
 @app.get("/config/default-power")
@@ -218,8 +251,8 @@ async def get_default_power(channels: str = "1,2,3,4") -> APIResponse:
 @app.post("/config/default-dataline")
 async def set_default_dataline(req: DefaultStatusRequest) -> APIResponse:
     channels = resolve_channels(req.channels)
-    data = _get_protocol().set_default_dataline(channels, req.enable, req.state)
-    return APIResponse(success=True, data=data)
+    _get_protocol().set_default_dataline(channels, req.enable, req.state)
+    return APIResponse(success=True, data={"set": True})
 
 
 @app.get("/config/default-dataline")

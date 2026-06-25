@@ -9,8 +9,7 @@ from smartusbhub_cli.protocol import HubNotFoundError, HubProtocol, HubTimeoutEr
 
 def test_hub_protocol_power(mock_hub):
     proto = HubProtocol("/dev/fakehub")
-    result = proto.set_power([1, 3], True)
-    assert result == {1: True, 3: True}
+    assert proto.set_power([1, 3], True) is True
     result = proto.get_power([1, 2, 3, 4])
     assert result[1] is True
     assert result[3] is True
@@ -19,12 +18,28 @@ def test_hub_protocol_power(mock_hub):
 def test_hub_protocol_power_timeout(mock_hub, monkeypatch):
     from smartusbhub_cli import protocol as protocol_module
 
-    class TimeoutHub(protocol_module.SmartUSBHub):
-        def set_channel_power(self, *channels, state):
-            return False
+    class SilentSerial:
+        def __init__(self, port: str, *args: object, **kwargs: object) -> None:
+            self.port = port
 
-    monkeypatch.setattr(protocol_module, "SmartUSBHub", TimeoutHub)
-    proto = HubProtocol("/dev/fakehub")
+        @property
+        def in_waiting(self) -> int:
+            return 0
+
+        def write(self, data: bytes) -> int:
+            return len(data)
+
+        def read(self, size: int = 1) -> bytes:
+            return b""
+
+        def flush(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(protocol_module.serial, "Serial", SilentSerial)
+    proto = HubProtocol("/dev/fakehub", timeout=0.05)
     with pytest.raises(HubTimeoutError):
         proto.set_power([1], True)
 
@@ -37,8 +52,10 @@ def test_hub_protocol_interlock(mock_hub):
 
 def test_hub_protocol_dataline(mock_hub):
     proto = HubProtocol("/dev/fakehub")
-    result = proto.set_dataline([2, 4], True)
-    assert result == {2: True, 4: True}
+    assert proto.set_dataline([2, 4], True) is True
+    result = proto.get_dataline([2, 4])
+    assert result[2] is True
+    assert result[4] is True
 
 
 def test_hub_protocol_measurements(mock_hub):
@@ -49,15 +66,15 @@ def test_hub_protocol_measurements(mock_hub):
 
 def test_hub_protocol_default_power(mock_hub):
     proto = HubProtocol("/dev/fakehub")
-    result = proto.set_default_power([1], enable=True, state=True)
-    assert result[1] == {"enabled": True, "value": True}
+    assert proto.set_default_power([1], enable=True, state=True) is True
     result = proto.get_default_power([1])
     assert result[1] == {"enabled": True, "value": True}
 
 
 def test_hub_protocol_default_dataline(mock_hub):
     proto = HubProtocol("/dev/fakehub")
-    result = proto.set_default_dataline([2], enable=True, state=False)
+    assert proto.set_default_dataline([2], enable=True, state=False) is True
+    result = proto.get_default_dataline([2])
     assert result[2] == {"enabled": True, "value": False}
 
 

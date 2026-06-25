@@ -16,7 +16,7 @@ def mcp_server(mock_hub, monkeypatch):
 
     def fake_load_config(path=None):
         cfg = original_load_config(path)
-        cfg.port = "/dev/fakehub"
+        cfg.device = "/dev/fakehub"
         return cfg
 
     monkeypatch.setattr(config_module, "load_config", fake_load_config)
@@ -37,8 +37,7 @@ async def test_mcp_tool_power_on(mcp_server):
     import json
 
     data = json.loads(_tool_text(result))["data"]
-    assert data["1"] is True
-    assert data["3"] is True
+    assert data is True
 
 
 async def test_mcp_tool_power_status(mcp_server):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -14,7 +14,8 @@ DEFAULT_TIMEOUT = 0.5
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 8000
 DEFAULT_MCP_PORT = 8001
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "smartusbhub_cli" / "config.json"
+DEFAULT_DEVICE = "/dev/ttyACM0"
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "smartusbhub_cli.json"
 
 
 @dataclass
@@ -22,14 +23,17 @@ class Config:
     """Runtime configuration for smartusbhub_cli."""
 
     # Serial settings
-    port: Optional[str] = None
+    device: Optional[str] = None
     baudrate: int = DEFAULT_BAUDRATE
     timeout: float = DEFAULT_TIMEOUT
 
-    # HTTP server / client settings
-    host: str = DEFAULT_HOST
-    http_port: int = DEFAULT_HTTP_PORT
-    remote_url: Optional[str] = None
+    # Config-driven client mode: if server_host is set, normal subcommands will
+    # connect to http://server_host:server_port instead of opening the local
+    # serial port.  These values also serve as the default bind address for the
+    # explicit ``server`` subcommand.  When server_host is omitted the server
+    # subcommand binds to localhost (127.0.0.1).
+    server_host: Optional[str] = None
+    server_port: Optional[int] = None
 
     # MCP settings
     mcp_transport: str = "stdio"  # or "sse"
@@ -37,28 +41,22 @@ class Config:
     mcp_host: str = DEFAULT_HOST
 
     # Output formatting
-    human_readable: bool = False
+    pretty: bool = True
 
-    # Extra config bag for future extensions
-    extra: Dict[str, Any] = field(default_factory=dict)
+    @property
+    def remote_url(self) -> Optional[str]:
+        """Return the implied HTTP client URL when server_host is set."""
+        if not self.server_host:
+            return None
+        return f"http://{self.server_host}:{self.server_port or DEFAULT_HTTP_PORT}"
 
     def is_remote(self) -> bool:
         """Return True if CLI should operate as an HTTP client."""
-        return self.remote_url is not None and self.remote_url.strip() != ""
+        return self.server_host is not None and self.server_host.strip() != ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the configuration to a plain dictionary."""
         return asdict(self)
-
-
-def _deep_update(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """Recursively update ``base`` with values from ``override``."""
-    for key, value in override.items():
-        if isinstance(value, dict) and key in base and isinstance(base[key], dict):
-            _deep_update(base[key], value)
-        else:
-            base[key] = value
-    return base
 
 
 def load_config(path: Optional[Path] = None) -> Config:
@@ -88,23 +86,17 @@ def load_config(path: Optional[Path] = None) -> Config:
         for key in cfg.to_dict().keys():
             if key in file_data:
                 setattr(cfg, key, file_data[key])
-        # Any unknown keys go into the extra bag.
-        for key, value in file_data.items():
-            if key not in cfg.to_dict():
-                cfg.extra[key] = value
 
     # Environment variables override the config file.
-    if os.getenv("SMARTUSBHUB_PORT"):
-        cfg.port = os.getenv("SMARTUSBHUB_PORT")
-    if os.getenv("SMARTUSBHUB_REMOTE"):
-        cfg.remote_url = os.getenv("SMARTUSBHUB_REMOTE")
-    if os.getenv("SMARTUSBHUB_HOST"):
-        cfg.host = os.getenv("SMARTUSBHUB_HOST")
-    if os.getenv("SMARTUSBHUB_HTTP_PORT"):
+    if os.getenv("SMARTUSBHUB_DEVICE"):
+        cfg.device = os.getenv("SMARTUSBHUB_DEVICE")
+    if os.getenv("SMARTUSBHUB_SERVER_HOST"):
+        cfg.server_host = os.getenv("SMARTUSBHUB_SERVER_HOST")
+    if os.getenv("SMARTUSBHUB_SERVER_PORT"):
         try:
-            cfg.http_port = int(os.getenv("SMARTUSBHUB_HTTP_PORT"))
+            cfg.server_port = int(os.getenv("SMARTUSBHUB_SERVER_PORT"))
         except ValueError as exc:
-            raise RuntimeError("SMARTUSBHUB_HTTP_PORT must be an integer") from exc
+            raise RuntimeError("SMARTUSBHUB_SERVER_PORT must be an integer") from exc
     if os.getenv("SMARTUSBHUB_MCP_PORT"):
         try:
             cfg.mcp_port = int(os.getenv("SMARTUSBHUB_MCP_PORT"))
