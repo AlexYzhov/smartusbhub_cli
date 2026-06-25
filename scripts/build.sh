@@ -81,7 +81,7 @@ ensure_build_deps() {
         $PIP_INSTALL build
     fi
 
-    if ! command -v "$PYTHON" -m shiv >/dev/null 2>&1; then
+    if ! "$PYTHON" -m shiv --help >/dev/null 2>&1; then
         echo "Installing shiv into ${PYTHON}..."
         $PIP_INSTALL shiv
     fi
@@ -113,6 +113,13 @@ build_native() {
         "$wheel"
     chmod +x "$binary"
     echo "Binary: $binary"
+
+    # Smoke test: the binary must be able to print its own help.
+    if ! "$binary" --help >/dev/null 2>&1; then
+        echo "ERROR: Built binary does not run. Check that all dependencies were bundled." >&2
+        exit 1
+    fi
+    echo "Binary smoke test passed."
 }
 
 build_other_arch_with_docker() {

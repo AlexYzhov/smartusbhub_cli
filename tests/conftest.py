@@ -241,3 +241,10 @@ def mock_hub(fake_serial):
 def fake_hub_class():
     """Backward-compatible alias for tests that reference the old fake hub class."""
     return MagicMock
+
+
+@pytest.fixture(autouse=True)
+def _disable_rich_color(monkeypatch):
+    """Disable Rich/Typer colored output so assertions are CI-safe."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
