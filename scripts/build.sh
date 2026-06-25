@@ -4,33 +4,32 @@ set -euo pipefail
 # Build script for smartusbhub_cli.
 #
 # Usage:
-#   ./scripts/build.sh              # build only the host-arch binary + zipapp
+#   ./scripts/build.sh              # build the host-arch single-file executable + wheel/sdist
 #   ./scripts/build.sh --multi-arch # also attempt the other arch via Docker
 #   ./scripts/build.sh --host-only  # same as default (explicit)
-#   source ./scripts/build.sh       # export SMARTUSBHUB_BIN pointing to the
-#                                   # host-arch binary (builds it if missing)
 #
-# When sourced, this script does not attempt a cross-arch build; it only
-# ensures the host-arch binary exists and sets SMARTUSBHUB_BIN accordingly.
+# Artifacts are written to dist/:
+#   - smartusbhub_cli-<version>-py3-none-any.whl
+#   - smartusbhub_cli-<version>.tar.gz
+#   - smartusbhub-linux-<arch>
+#
+# The single-file executable is a shiv zipapp: it contains the wheel plus all
+# dependencies and runs on any Linux with Python >=3.10 installed.
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# Use Tsinghua PyPI mirror for all network access in this script.
+export PIP_INDEX_URL="https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+export PIP_TRUSTED_HOST="mirrors.tuna.tsinghua.edu.cn"
+
 # Prefer the local virtual environment if it exists.
-if [ -x "${PROJECT_ROOT}/.venv/bin/python" ]; then
-    PYTHON="${PYTHON:-${PROJECT_ROOT}/.venv/bin/python}"
-else
-    PYTHON="${PYTHON:-python3}"
+PYTHON="${PYTHON:-${PROJECT_ROOT}/.venv/bin/python}"
+if [ ! -x "$PYTHON" ]; then
+    PYTHON="python3"
 fi
 
-PYINSTALLER="${PROJECT_ROOT}/.venv/bin/pyinstaller"
-if [ ! -x "$PYINSTALLER" ]; then
-    PYINSTALLER="pyinstaller"
-fi
-
-BUILD_DIR="${PROJECT_ROOT}/build"
 DIST_DIR="${PROJECT_ROOT}/dist"
-
 mkdir -p "$DIST_DIR"
 
 # Embed the current git commit hash so the built artifact can report it even
@@ -74,26 +73,44 @@ case "$HOST_ARCH" in
         ;;
 esac
 
-# Ensure dependencies are installed
-if ! command -v "$PYINSTALLER" &>/dev/null; then
-    echo "Installing PyInstaller into ${PYTHON}..."
-    "$PYTHON" -m pip install pyinstaller
-fi
+PIP_INSTALL="$PYTHON -m pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 
-build_zipapp() {
-    echo "Building zipapp..."
-    "$PYTHON" -m zipapp src \
-        -m "smartusbhub_cli.__main__:app" \
-        -o "$DIST_DIR/smartusbhub.pyz"
-    echo "zipapp: $DIST_DIR/smartusbhub.pyz"
+ensure_build_deps() {
+    if ! "$PYTHON" -m build --help >/dev/null 2>&1; then
+        echo "Installing build tools into ${PYTHON}..."
+        $PIP_INSTALL build
+    fi
+
+    if ! command -v "$PYTHON" -m shiv >/dev/null 2>&1; then
+        echo "Installing shiv into ${PYTHON}..."
+        $PIP_INSTALL shiv
+    fi
+}
+
+build_wheel() {
+    echo "Building wheel and sdist..."
+    "$PYTHON" -m build --outdir "$DIST_DIR"
+    echo "wheel/sdist: $DIST_DIR/smartusbhub_cli-*"
 }
 
 build_native() {
     local arch="$1"
-    echo "Building smartusbhub binary for ${arch}..."
-    "$PYINSTALLER" smartusbhub_cli.spec
+    echo "Building single-file executable for ${arch}..."
+
+    local wheel
+    wheel=$(ls "$DIST_DIR"/smartusbhub_cli-*.whl | head -n 1)
+    if [ -z "$wheel" ]; then
+        echo "No wheel found in $DIST_DIR; run build_wheel first." >&2
+        exit 1
+    fi
+
     local binary="$DIST_DIR/smartusbhub-linux-${arch}"
-    mv "$DIST_DIR/smartusbhub" "$binary"
+    "$PYTHON" -m shiv \
+        -c smartusbhub \
+        -o "$binary" \
+        --python '/usr/bin/env python3' \
+        --compressed \
+        "$wheel"
     chmod +x "$binary"
     echo "Binary: $binary"
 }
@@ -114,18 +131,17 @@ build_other_arch_with_docker() {
         return 0
     fi
 
-    echo "Attempting to build ${other_arch} binary via Docker (this may be slow)..."
+    echo "Attempting to build ${other_arch} executable via Docker (this may be slow)..."
     if docker run --rm --platform "linux/${other_arch}" \
         -v "$PROJECT_ROOT:/workspace" \
         -w /workspace \
         python:3.11-slim \
         bash -c "
             set -euo pipefail
-            python -m pip install --upgrade pip
-            pip install -e '.[dev]'
-            pyinstaller smartusbhub_cli.spec
-            mv dist/smartusbhub dist/smartusbhub-linux-${other_arch}
-            chmod +x dist/smartusbhub-linux-${other_arch}
+            python -m pip install --upgrade pip -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+            pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple -e '.[dev]'
+            ./scripts/build.sh --host-only
+            mv dist/smartusbhub-linux-x86_64 dist/smartusbhub-linux-${other_arch} || true
         "; then
         echo "Cross-arch binary: $DIST_DIR/smartusbhub-linux-${other_arch}"
     else
@@ -134,31 +150,17 @@ build_other_arch_with_docker() {
 }
 
 # ---------------------------------------------------------------------------
-# Sourced mode: export SMARTUSBHUB_BIN for the host architecture.
-# Build the host binary (and zipapp) only if it does not already exist.
-# ---------------------------------------------------------------------------
-if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
-    HOST_BIN="$DIST_DIR/smartusbhub-linux-${HOST_ARCH_LABEL}"
-    if [ ! -f "$HOST_BIN" ]; then
-        echo "Host-arch binary not found, building..."
-        build_native "$HOST_ARCH_LABEL"
-        build_zipapp
-    fi
-    export SMARTUSBHUB_BIN="$HOST_BIN"
-    echo "Sourced build environment: SMARTUSBHUB_BIN=${SMARTUSBHUB_BIN}"
-    return 0
-fi
-
-# ---------------------------------------------------------------------------
 # Direct execution mode
 # ---------------------------------------------------------------------------
+ensure_build_deps
+
 echo "Building smartusbhub_cli for host architecture (${HOST_ARCH_LABEL})..."
+build_wheel
 build_native "$HOST_ARCH_LABEL"
-build_zipapp
 
 if [ "$HOST_ONLY" = false ]; then
     build_other_arch_with_docker
 fi
 
 echo "Build complete. Artifacts in ${DIST_DIR}:"
-ls -la "$DIST_DIR"/smartusbhub-linux-* "$DIST_DIR"/smartusbhub.pyz 2>/dev/null || true
+ls -la "$DIST_DIR"/smartusbhub-linux-* "$DIST_DIR"/smartusbhub_cli-*.* 2>/dev/null || true

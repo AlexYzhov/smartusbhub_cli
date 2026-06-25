@@ -9,7 +9,9 @@ CLI, HTTP REST server, and MCP server for the SmartUSBHub.
 - **HTTP server**: expose the hub as a compact JSON REST API on a Linux host attached to the device.
 - **HTTP client mode**: run the same CLI commands against a remote `smartusbhub_cli` HTTP server. Pretty output is on by default.
 - **MCP server**: expose the hub as MCP tools so AI agents can control it via `stdio` or SSE. Returns compact JSON.
-- Cross-platform ARM64 / x86_64 Linux binaries via PyInstaller.
+- Cross-platform ARM64 / x86_64 Linux single-file executable (shiv zipapp).
+- Standard Python wheel distribution.
+- One-shot execution with `uvx`.
 
 ## Installation
 
@@ -22,9 +24,31 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### Single binary
+### From wheel
 
-Pre-built binaries are attached to GitHub Releases. To build locally:
+Pre-built wheels are attached to GitHub Releases. Install with pip:
+
+```bash
+pip install smartusbhub_cli-*.whl
+```
+
+Or use [uv](https://docs.astral.sh/uv/) for a self-contained tool install:
+
+```bash
+uv tool install smartusbhub_cli-*.whl
+```
+
+Run directly from a wheel without installing (via `uvx`):
+
+```bash
+uvx smartusbhub_cli-*.whl
+# or, once published to a package index:
+uvx smartusbhub-cli
+```
+
+### Build artifacts
+
+To build the single-file executable (shiv zipapp), wheel and sdist locally:
 
 ```bash
 # Host architecture only (default)
@@ -33,14 +57,11 @@ Pre-built binaries are attached to GitHub Releases. To build locally:
 # Also attempt cross-arch build via Docker (requires Docker/QEMU)
 ./scripts/build.sh --multi-arch
 
-# Source the build environment to get SMARTUSBHUB_BIN pointing to the
-# host-arch binary (builds it first if necessary)
-source ./scripts/build.sh
-
 # outputs:
-#   dist/smartusbhub-linux-x86_64
-#   dist/smartusbhub-linux-aarch64   # when --multi-arch succeeds
-#   dist/smartusbhub.pyz
+#   dist/smartusbhub-linux-x86_64   # shiv zipapp, requires Python >=3.10
+#   dist/smartusbhub-linux-aarch64  # when --multi-arch succeeds
+#   dist/smartusbhub_cli-*.whl
+#   dist/smartusbhub_cli-*.tar.gz
 ```
 
 ## Quick start
@@ -97,15 +118,18 @@ smartusbhub --verify-delay 0.2 power on --ch 1
 
 ### HTTP server
 
-Run on the host directly attached to the SmartUSBHub (binds to localhost by
-default):
+Run on the host directly attached to the SmartUSBHub (binds to `0.0.0.0` by
+default so it accepts connections from any interface):
 
 ```bash
-# Auto-scan by SmartUSBHub USB VID/PID and bind to localhost:8000
+# Auto-scan by SmartUSBHub USB VID/PID and bind to 0.0.0.0:8000
 smartusbhub server --port 8000
 
 # Or specify the serial device explicitly
 smartusbhub server --port 8000 --serial-port /dev/ttyACM0
+
+# Bind to a specific interface only
+smartusbhub server --host 127.0.0.1 --port 8000
 ```
 
 If no device is given and exactly one SmartUSBHub is found, it is used
@@ -153,18 +177,19 @@ automatically when no `--config` argument is given):
   "device": "/dev/ttyACM0",
   "baudrate": 115200,
   "timeout": 0.5,
-  "server_host": "127.0.0.1",
+  "server_host": "0.0.0.0",
   "server_port": 8000,
   "mcp_transport": "stdio",
   "mcp_port": 8001,
-  "mcp_host": "127.0.0.1",
+  "mcp_host": "0.0.0.0",
   "pretty": true
 }
 ```
 
-- If `server_host` is set, normal subcommands (e.g. `power`, `voltage`, `info`) run in HTTP **client mode** and connect to `http://server_host:server_port`.
+- If `server_host` is set, normal subcommands (e.g. `power`, `voltage`, `info`) run in HTTP **client mode** and connect to `http://server_host:server_port`. For a remote client, set `server_host` to the server's real IP; `0.0.0.0` works for local clients.
 - If `server_host` is omitted, the CLI works in native serial mode.
-- The explicit `server` subcommand binds to `server_host:server_port` by default, or to `127.0.0.1:8000` if neither is configured; `--host` / `--port` override the config. The same `server_host`/`server_port` can therefore drive both the server and the client from one config file.
+- The explicit `server` subcommand binds to `server_host:server_port` by default, or to `0.0.0.0:8000` if neither is configured; `--host` / `--port` override the config.
+- The explicit `mcp` subcommand binds to `mcp_host:mcp_port` by default, or to `0.0.0.0:8001`; `--host` / `--port` override the config.
 - `device` is used by native serial mode and by the `server`/`mcp` subcommands. The server also auto-scans by USB VID/PID when `device` is not set.
 
 Use the `setup` subcommand to generate a template:
@@ -201,7 +226,7 @@ Run tests:
 pytest
 ```
 
-Build and test the binary:
+Build and test the single-file executable:
 
 ```bash
 ./scripts/build.sh

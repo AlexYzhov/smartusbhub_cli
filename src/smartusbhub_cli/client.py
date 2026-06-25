@@ -46,7 +46,13 @@ class HTTPClient:
     ) -> Any:
         """Make an HTTP request and return the JSON ``data`` field."""
         url = f"{self.base_url}{path}"
-        response = self._client.request(method, url, json=json_data, params=params)
+        try:
+            response = self._client.request(method, url, json=json_data, params=params)
+        except httpx.RequestError as exc:
+            raise HTTPClientError(
+                f"Could not connect to server at {self.base_url}: {exc}"
+            ) from exc
+
         try:
             payload = response.json()
         except Exception as exc:

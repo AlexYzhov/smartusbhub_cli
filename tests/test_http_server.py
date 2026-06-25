@@ -174,3 +174,34 @@ def test_wrong_commit_hash_rejected(client):
         resp = bad_client.get("/health")
         assert resp.status_code == 400
         assert "Commit hash mismatch" in resp.json()["error"]
+
+
+@pytest.fixture
+def disconnected_client(monkeypatch):
+    """Return a TestClient with no underlying hub protocol."""
+    from smartusbhub_cli import config as config_module
+
+    def fake_load_config(path=None):
+        cfg = config_module.Config()
+        cfg.device = None
+        cfg.server_host = None
+        return cfg
+
+    monkeypatch.setattr(config_module, "load_config", fake_load_config)
+    http_server._server_state.protocol = None
+
+    with TestClient(
+        http_server.app,
+        headers={"X-Commit-Hash": get_commit_hash()},
+    ) as test_client:
+        yield test_client
+
+    http_server._server_state.protocol = None
+
+
+def test_device_info_returns_503_when_disconnected(disconnected_client):
+    resp = disconnected_client.get("/device-info")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["success"] is False
+    assert "No serial connection configured" in body["error"]

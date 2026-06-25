@@ -99,9 +99,13 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         if device:
             try:
                 _server_state.protocol = HubProtocol(device, cfg.baudrate, cfg.timeout)
-            except HubError:
+                logger.info("Connected to SmartUSBHub on %s", device)
+            except HubError as exc:
                 # The server can still start; endpoints will return 503 until
                 # the connection is available.
+                logger.warning(
+                    "Could not open SmartUSBHub on %s: %s", device, exc
+                )
                 _server_state.protocol = None
 
     yield
@@ -160,6 +164,16 @@ async def _value_error_handler(_request: Request, exc: ValueError) -> JSONRespon
     return JSONResponse(
         status_code=400,
         content={"success": False, "data": None, "error": str(exc)},
+    )
+
+
+@app.exception_handler(Exception)
+async def _catch_all_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Return a generic 500 instead of leaking a traceback to the client."""
+    logger.exception("Unhandled server error: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "data": None, "error": f"Internal server error: {exc}"},
     )
 
 

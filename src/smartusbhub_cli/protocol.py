@@ -203,6 +203,13 @@ class HubProtocol:
             return None
         return cls(ports[0], baudrate, timeout)
 
+    @staticmethod
+    def _map_serial_error(port: str, exc: Exception) -> HubNotFoundError:
+        """Convert a low-level serial/OSError into a user-friendly HubError."""
+        return HubNotFoundError(
+            f"Serial device {port!r} is not available: {exc}"
+        )
+
     @property
     def _serial(self) -> serial.Serial:
         if self._closed:
@@ -219,10 +226,8 @@ class HubProtocol:
                 reset = getattr(self._ser, "reset_input_buffer", None)
                 if reset is not None:
                     reset()
-            except serial.SerialException as exc:
-                raise HubNotFoundError(
-                    f"Could not open serial port {self.port}: {exc}"
-                ) from exc
+            except (serial.SerialException, OSError) as exc:
+                raise self._map_serial_error(self.port, exc) from exc
         return self._ser
 
     def close(self) -> None:
@@ -246,9 +251,12 @@ class HubProtocol:
     # Low-level IO
     # ------------------------------------------------------------------
     def _send(self, frame: bytes) -> None:
-        ser = self._serial
-        ser.write(frame)
-        ser.flush()
+        try:
+            ser = self._serial
+            ser.write(frame)
+            ser.flush()
+        except (serial.SerialException, OSError) as exc:
+            raise self._map_serial_error(self.port, exc) from exc
         logger.debug("Sent: %s", frame.hex(" "))
 
     def _receive(
@@ -276,8 +284,11 @@ class HubProtocol:
             if remaining <= 0:
                 break
             ser = self._serial
-            ser.timeout = max(remaining, 0.01)
-            chunk = ser.read(max(1, ser.in_waiting))
+            try:
+                ser.timeout = max(remaining, 0.01)
+                chunk = ser.read(max(1, ser.in_waiting))
+            except (serial.SerialException, OSError) as exc:
+                raise self._map_serial_error(self.port, exc) from exc
             if chunk:
                 buffer.extend(chunk)
                 frames, consumed = _parse_frames(buffer)

@@ -22,6 +22,7 @@ import typer
 from smartusbhub_cli import config as config_module
 from smartusbhub_cli.client import HTTPClient, HTTPClientError
 from smartusbhub_cli.config import (
+    DEFAULT_BIND_HOST,
     DEFAULT_CONFIG_PATH,
     DEFAULT_DEVICE,
     DEFAULT_HOST,
@@ -84,11 +85,12 @@ def _resolve_device(
         return ports[0]
     if len(ports) == 0:
         raise HubNotFoundError(
-            "No SmartUSBHub detected. Specify --device or set device in config."
+            "No SmartUSBHub detected (VID 0x1A86, PID 0xFE0C). "
+            "Connect the hub or specify --device / set device in config."
         )
     raise HubNotFoundError(
         f"Multiple SmartUSBHubs detected: {', '.join(ports)}. "
-        "Specify --device or set device in config to choose one."
+        "Use --device or set device in config to choose one."
     )
 
 
@@ -229,12 +231,18 @@ def main(
     """
     cfg_path = Path(config_file) if config_file else None
     cfg = config_module.load_config(cfg_path)
-    if device:
-        cfg.device = device
+
     if remote:
+        # Explicit --remote forces client mode.
         parsed = urlparse(remote)
         cfg.server_host = parsed.hostname or DEFAULT_HOST
         cfg.server_port = parsed.port or DEFAULT_HTTP_PORT
+    elif device:
+        # Explicit --device forces native serial mode, ignoring any config that
+        # would put us into client mode.
+        cfg.device = device
+        cfg.server_host = None
+        cfg.server_port = None
 
     ctx.ensure_object(dict)
     ctx.obj["config"] = cfg
@@ -893,7 +901,7 @@ def server(
     from smartusbhub_cli.http_server import _server_state, run_server
 
     cfg = ctx.obj["config"]
-    host = host or cfg.server_host or DEFAULT_HOST
+    host = host or cfg.server_host or DEFAULT_BIND_HOST
     port = port or cfg.server_port or DEFAULT_HTTP_PORT
     device = _resolve_device(cfg, serial_port)
 
@@ -913,7 +921,7 @@ def server(
 @app.command(name="mcp")
 def mcp_cmd(
     transport: str = typer.Option("stdio", "--transport", help="stdio or sse."),
-    host: str = typer.Option(DEFAULT_HOST, "--host", help="SSE bind host."),
+    host: str = typer.Option(DEFAULT_BIND_HOST, "--host", help="SSE bind host."),
     port: int = typer.Option(DEFAULT_MCP_PORT, "--port", help="SSE bind port."),
     serial_port: Optional[str] = typer.Option(None, "--serial-port", help="Serial port."),
 ) -> None:
@@ -927,7 +935,7 @@ def mcp_cmd(
 # setup
 # ------------------------------------------------------------------
 def _find_free_port(
-    host: str = "127.0.0.1", min_port: int = 9001, max_port: int = 65535
+    host: str = DEFAULT_BIND_HOST, min_port: int = 9001, max_port: int = 65535
 ) -> int:
     """Return an unused TCP port on ``host`` in the range (min_port, max_port]."""
     # Resolve the address family for the requested host.
@@ -989,7 +997,7 @@ def setup(
 
     cfg = Config()
     target = ctx.obj.get("config_path") or DEFAULT_CONFIG_PATH
-    bind_host = host or "127.0.0.1"
+    bind_host = host or DEFAULT_BIND_HOST
 
     cfg.device = device or DEFAULT_DEVICE
 
@@ -1022,5 +1030,10 @@ client_app.command(name="firmware-version")(firmware_version)
 client_app.command(name="hardware-version")(hardware_version)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console entry point used by the ``smartusbhub`` script and PyInstaller."""
     app()
+
+
+if __name__ == "__main__":
+    main()

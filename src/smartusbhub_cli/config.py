@@ -11,7 +11,8 @@ from typing import Any, Dict, Optional
 
 DEFAULT_BAUDRATE = 115200
 DEFAULT_TIMEOUT = 0.5
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "127.0.0.1"          # Default for client-mode connections
+DEFAULT_BIND_HOST = "0.0.0.0"       # Default for server/MCP bind address
 DEFAULT_HTTP_PORT = 8000
 DEFAULT_MCP_PORT = 8001
 DEFAULT_DEVICE = "/dev/ttyACM0"
@@ -38,7 +39,7 @@ class Config:
     # MCP settings
     mcp_transport: str = "stdio"  # or "sse"
     mcp_port: int = DEFAULT_MCP_PORT
-    mcp_host: str = DEFAULT_HOST
+    mcp_host: str = DEFAULT_BIND_HOST
 
     # Output formatting
     pretty: bool = True

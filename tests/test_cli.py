@@ -640,6 +640,88 @@ def test_client_subcommand_requires_host_or_config(tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------------
+# native auto-scan / missing device
+# ------------------------------------------------------------------
+def test_native_warns_when_no_hub(tmp_path, monkeypatch):
+    from smartusbhub_cli import config as config_module
+    from smartusbhub_cli.protocol import HubProtocol
+
+    config_path = tmp_path / "smartusbhub_cli.json"
+    config_path.write_text(json.dumps({}))
+
+    def fake_load_config(path=None):
+        cfg = config_module.Config()
+        cfg.device = None
+        cfg.server_host = None
+        return cfg
+
+    monkeypatch.setattr(config_module, "load_config", fake_load_config)
+    monkeypatch.setattr(HubProtocol, "scan_ports", lambda: [])
+
+    result = runner.invoke(
+        app, ["--no-pretty", "--config", str(config_path), "info"]
+    )
+    assert result.exit_code != 0
+    assert "No SmartUSBHub detected" in " ".join(result.output.split())
+
+
+def test_native_warns_when_multiple_hubs(tmp_path, monkeypatch):
+    from smartusbhub_cli import config as config_module
+    from smartusbhub_cli.protocol import HubProtocol
+
+    config_path = tmp_path / "smartusbhub_cli.json"
+    config_path.write_text(json.dumps({}))
+
+    def fake_load_config(path=None):
+        cfg = config_module.Config()
+        cfg.device = None
+        cfg.server_host = None
+        return cfg
+
+    monkeypatch.setattr(config_module, "load_config", fake_load_config)
+    monkeypatch.setattr(
+        HubProtocol, "scan_ports", lambda: ["/dev/hub1", "/dev/hub2"]
+    )
+
+    result = runner.invoke(
+        app, ["--no-pretty", "--config", str(config_path), "info"]
+    )
+    assert result.exit_code != 0
+    assert "Multiple SmartUSBHubs detected" in " ".join(result.output.split())
+
+
+def test_native_warns_when_device_not_found(monkeypatch):
+    """An explicit --device that cannot be opened must print a warning, not panic."""
+    import serial as real_serial
+
+    from smartusbhub_cli import config as config_module
+    from smartusbhub_cli import protocol as protocol_module
+    from tests.conftest import FakeSerial
+
+    def fake_load_config(path=None):
+        cfg = config_module.Config()
+        cfg.device = None
+        cfg.server_host = None
+        return cfg
+
+    def strict_serial(port: str, *args, **kwargs):
+        if port == "/dev/nonexistent":
+            raise real_serial.SerialException(
+                f"[Errno 2] No such file or directory: '{port}'"
+            )
+        return FakeSerial(port, *args, **kwargs)
+
+    monkeypatch.setattr(config_module, "load_config", fake_load_config)
+    monkeypatch.setattr(protocol_module.serial, "Serial", strict_serial)
+
+    result = runner.invoke(
+        app, ["--no-pretty", "--device", "/dev/nonexistent", "info"]
+    )
+    assert result.exit_code != 0
+    assert "not available" in " ".join(result.output.split())
+
+
+# ------------------------------------------------------------------
 # server auto-scan
 # ------------------------------------------------------------------
 def test_server_auto_scans_single_hub(tmp_path, monkeypatch, mock_hub):
@@ -671,7 +753,7 @@ def test_server_auto_scans_single_hub(tmp_path, monkeypatch, mock_hub):
         app, ["--config", str(config_path), "server", "--port", "9000"]
     )
     assert result.exit_code == 0, result.output
-    assert captured["host"] == "127.0.0.1"
+    assert captured["host"] == "0.0.0.0"
     assert captured["port"] == 9000
     assert captured["port_name"] == "/dev/fakehub"
 
