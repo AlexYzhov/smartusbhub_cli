@@ -19,8 +19,7 @@ CLI, HTTP REST server, and MCP server for the SmartUSBHub.
 
 ```bash
 cd smartusbhub_cli
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
@@ -51,6 +50,10 @@ uvx smartusbhub-cli
 To build the single-file executable (shiv zipapp), wheel and sdist locally:
 
 ```bash
+# prepare virtual environment
+cd smartusbhub_cli
+python3 -m venv .venv && source .venv/bin/activate
+
 # Host architecture only (default)
 ./scripts/build.sh
 
